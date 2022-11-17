@@ -1,6 +1,25 @@
 // Generated from prost-build
 
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Request {
+    #[prost(uint64, tag = "1")]
+    pub term: u64,
+    #[prost(oneof = "request::Requests", tags = "2, 3")]
+    pub requests: ::core::option::Option<request::Requests>,
+}
+
+/// Nested message and enum types in `Request`.
+pub mod request {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Requests {
+        #[prost(message, tag = "2")]
+        Vote(super::VoteRequest),
+        #[prost(message, tag = "3")]
+        Append(super::AppendRequest),
+    }
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct VoteRequest {
     #[prost(uint64, tag = "1")]
     pub term: u64,

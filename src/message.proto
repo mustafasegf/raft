@@ -2,6 +2,14 @@ syntax = "proto3";
 
 package message;
 
+message Request {
+  uint64 term = 1;
+  oneof Requests {
+    VoteRequest vote = 2;
+    AppendRequest append = 3;
+  }
+}
+
 message VoteRequest {
   uint64 term = 1;
   uint64 candidate_id = 2;
