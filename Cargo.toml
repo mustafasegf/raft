@@ -9,6 +9,7 @@ edition = "2021"
 futures = "0.3.25"
 prost = "0.11.2"
 prost-derive = "0.11.2"
+rand = "0.8.5"
 tokio = { version = "1.21.2", features = ["full"] }
 
 [build-dependencies]
