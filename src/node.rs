@@ -1,10 +1,11 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
+use crate::parser::ArgsPeer;
 use core::fmt::{Debug, Display};
 use prost::Message;
 use rand::RngCore;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
@@ -18,42 +19,53 @@ use crate::message;
 // }
 
 #[derive(Default, Debug)]
-pub struct Node<NodeId> {
-    pub id: NodeId,
-    pub peers: Vec<Peer<NodeId>>,
+pub struct Node {
+    pub id: i32,
+    pub peers: Vec<Peer>,
     pub server: String,
-    pub client: String,
-    pub socket: Option<TcpSocket>,
 
+    // cant use this this
+    // use mailbox and channel
+    // pub client: String,
     pub curent_term: u64,
-    pub voted_for: Option<NodeId>,
+    pub voted_for: Option<i32>,
     pub listener: Option<TcpListener>,
     // role: Role,
 }
 
 #[derive(Default, Debug)]
-pub struct Peer<NodeId> {
-    id: NodeId,
+pub struct Peer {
+    id: i32,
     server: String,
-    client: String,
     tx: Option<OwnedWriteHalf>,
     rx: Option<OwnedReadHalf>,
 }
 
-impl<NodeId> Node<NodeId>
-where
-    NodeId: Ord + Copy + Display + Debug,
-{
-    pub fn new(id: NodeId, server: String, client: String, peers: Vec<Peer<NodeId>>) -> Self {
+impl Node {
+    pub fn new(id: i32, server: String, peers: Vec<ArgsPeer>) -> Self {
         Self {
             id,
             server,
-            client,
-            peers,
+            peers: peers
+                .into_iter()
+                .map(|peer| Peer {
+                    id: peer.id,
+                    server: peer.server,
+                    ..Default::default()
+                })
+                .collect(),
             curent_term: 1,
             voted_for: None,
             listener: None,
-            socket: None,
+        }
+    }
+
+    pub fn to_peer(&self) -> Peer {
+        Peer {
+            id: self.id,
+            server: self.server.clone(),
+            tx: None,
+            rx: None,
         }
     }
 
@@ -61,34 +73,24 @@ where
         let listener = TcpListener::bind(&self.server).await?;
 
         self.listener = Some(listener);
-        println!("node {} listening on {}", &self.id, &self.server);
+        println!("node {} binding on {}", &self.id, &self.server);
         Ok(())
     }
 
     pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("node {} trying to connect", &self.id);
         for peer in &mut self.peers {
-            let addr_server = peer.server.parse()?;
-            let addr_client = self.client.parse()?;
+            let addr_server = peer.server.parse::<SocketAddr>()?;
 
-            println!("node {} trying to connect to {}", &self.id, &addr_server);
+            println!("node {} trying to connect to {}", &self.id, &peer.server);
 
-            let stream = loop {
-                let socket = TcpSocket::new_v4()?;
+            let stream = TcpStream::connect(addr_server).await?;
 
-                socket.bind(addr_client)?;
-                let Ok(stream) = socket.connect(addr_server).await else {
-                    continue;
-                };
-                println!(
-                    "client {} is connected to {}",
-                    addr_server,
-                    stream.peer_addr()?
-                );
-                break stream;
-            };
-
-            println!("server {} is connected to {}", &self.client, &peer.server);
+            println!(
+                "server {} is connected to {}",
+                &stream.peer_addr().unwrap(),
+                &peer.server
+            );
             let (rx, tx) = stream.into_split();
             peer.rx = Some(rx);
             peer.tx = Some(tx);
@@ -101,36 +103,23 @@ where
         println!("node {} trying to listen", &self.id);
 
         let listener = loop {
-            let Some(mut listener) = self.listener.take() else {
+            let Some(listener) = self.listener.take() else {
                     continue;
                 };
             break listener;
         };
+
+        // self.peers.iter_mut().for_each(|peer| {
+        //
+        // });
+
         println!("node {} listener available at {}", &self.id, &self.server);
-        let (mut stream, addr) = listener.accept().await?;
-        println!("{} is connected to {}", &self.server, &addr);
-        let (rx, tx) = stream.into_split();
+        // let (stream, addr) = listener.accept().await?;
+        // println!("{} is connected to {}", &self.server, &addr);
+        // let (rx, tx) = stream.into_split();
 
-        // address is different
-        println!(
-            "peer server: {}, self host: {}",
-            &addr.to_string(),
-            &self.server
-        );
-
-        // print all peer connect
-        for peer in &self.peers {
-            println!("peer connect: {}", &peer.client);
-        }
-
-        let mut peer = self
-            .peers
-            .iter_mut()
-            .find(|peer| peer.client == addr.to_string())
-            .unwrap();
-
-        peer.rx = Some(rx);
-        peer.tx = Some(tx);
+        // peer.rx = Some(rx);
+        // peer.tx = Some(tx);
         Ok(())
     }
 
@@ -145,15 +134,11 @@ where
     }
 }
 
-impl<NodeId> Peer<NodeId>
-where
-    NodeId: Ord + Copy + Display + Debug,
-{
-    pub fn new(id: NodeId, server: String, client: String) -> Self {
+impl Peer {
+    pub fn new(id: i32, server: String) -> Self {
         Self {
             id,
             server,
-            client,
             tx: None,
             rx: None,
         }

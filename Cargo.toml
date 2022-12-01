@@ -6,7 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+clap = { version = "4.0.28", features = ["derive", "debug", "env", "string"] }
 futures = "0.3.25"
+itertools = "0.10.5"
 prost = "0.11.2"
 prost-derive = "0.11.2"
 rand = "0.8.5"
