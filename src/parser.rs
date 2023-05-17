@@ -19,12 +19,8 @@ pub struct Args {
     #[arg(short, long)]
     pub server: String,
 
-    /// Number of node
-    #[arg(short, long, default_value_t = 1)]
-    pub count: i32,
-
     /// peers address
-    #[arg(short, long, value_parser = validate_peers)]
+    #[arg(short, long,  num_args = 1.., value_delimiter = ' ',  value_parser = validate_peers)]
     pub peers: Vec<ArgsPeer>,
 }
 
