@@ -20,7 +20,7 @@ async fn main() {
 
     dbg!(&args);
 
-    let node = node::Node::new(args.id, args.server, args.peers);
+    // let node = node::Node::new(args.id, args.server, args.peers);
     // let mut node1: Node<i32> = node::Node::new(
     //     1,
     //     "127.0.0.1:8080".to_string(),

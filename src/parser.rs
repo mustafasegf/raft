@@ -7,9 +7,9 @@ pub struct ArgsPeer {
     pub server: String,
 }
 
+/// simple raft implementation for learning
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-/// simple raft implementation for learning
 pub struct Args {
     /// node id
     #[arg(long)]
