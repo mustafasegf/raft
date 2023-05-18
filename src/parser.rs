@@ -1,11 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
 
-#[derive(Clone, Debug)]
-pub struct ArgsPeer {
-    pub id: i32,
-    pub server: String,
-}
+use crate::node::Peer;
 
 /// simple raft implementation for learning
 #[derive(Parser, Debug)]
@@ -21,10 +17,10 @@ pub struct Args {
 
     /// peers address
     #[arg(short, long,  num_args = 1.., value_delimiter = ' ',  value_parser = validate_peers)]
-    pub peers: Vec<ArgsPeer>,
+    pub peers: Vec<Peer>,
 }
 
-fn validate_peers(peer: &str) -> Result<ArgsPeer, String> {
+fn validate_peers(peer: &str) -> Result<Peer, String> {
     if peer.is_empty() {
         return Err(format!("peer is empty"));
     }
@@ -41,5 +37,5 @@ fn validate_peers(peer: &str) -> Result<ArgsPeer, String> {
         return Err(format!("peer {} id is invalid", peer));
     };
 
-    Ok(ArgsPeer {id, server})
+    Ok(Peer {id, server})
 }

@@ -1,5 +1,4 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
+#![allow(unused)]
 
 use itertools::Itertools;
 use prost::Message;
@@ -9,6 +8,7 @@ use raft::parser::Args;
 use rand::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
 use tokio::time::{timeout, Duration};
 
 use clap::Parser;
@@ -18,68 +18,42 @@ use node::Peer;
 async fn main() {
     let args = Args::parse();
 
-    dbg!(&args);
+    // dbg!(&args);
 
-    // let node = node::Node::new(args.id, args.server, args.peers);
-    // let mut node1: Node<i32> = node::Node::new(
-    //     1,
-    //     "127.0.0.1:8080".to_string(),
-    //     "127.0.0.1:8081".to_string(),
-    //     vec![],
-    // );
+    let mut node = node::Node::new(args.id, args.server, args.peers);
+    if let Err(err) = node.start().await {
+        println!("Error: {}", err);
+    };
+    
+    let data = message::Request {
+        term: 1,
+        requests: Some(message::request::Requests::Vote(message::VoteRequest {
+            term: 2,
+            candidate_id: 3,
+            last_log_idx: 4,
+            last_log_term: 5,
+        })),
+    };
+
+    // let buf = data.encode_length_delimited_to_vec();
+    // let buf: Vec<u8> = vec![12, 8, 1, 18, 8, 8, 2, 16, 3, 24, 4, 32, 5];
     //
-    // let mut node2: Node<i32> = node::Node::new(
-    //     2,
-    //     "127.0.0.1:8082".to_string(),
-    //     "127.0.0.1:8083".to_string(),
-    //     vec![],
-    // );
+    // println!("encoded: {:?}", &buf);
+    // println!("encoded len: {:?}", &buf.len());
     //
-    // let mut node3: Node<i32> = node::Node::new(
-    //     3,
-    //     "127.0.0.1:8084".to_string(),
-    //     "127.0.0.1:8085".to_string(),
-    //     vec![],
-    // );
-    //
-    // node1.peers.push(node2.to_peer());
-    // node1.peers.push(node3.to_peer());
-    //
-    // node2.peers.push(node1.to_peer());
-    // node2.peers.push(node3.to_peer());
-    //
-    // node3.peers.push(node1.to_peer());
-    // node3.peers.push(node2.to_peer());
-    //
-    //
-    //
-    // tokio::try_join!(
-    //     node1.start(),
-    //     node2.start(),
-    //     node3.start(),
-    // ).unwrap();
-    //
-    // tokio::spawn(async move {
-    //     node2.listen().await.unwrap();
-    // });
-    //
-    // tokio::spawn(async move {
-    //     node3.listen().await.unwrap();
-    // });
-    //
-    // if let Err(err) = node1.connect().await {
-    //     println!("Error: {}", err);
-    // };
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
+    // let dec = message::Request::decode_length_delimited(&buf[..]).unwrap();
+    // println!("decoded: {:?}", &dec);
+
+    let (tx_timer, _) = broadcast::channel(1);
+    let (tx_msg, _) = broadcast::channel(1);
+
+    tokio::select! {
+        _ = node.sender(tx_msg.subscribe()) => {},
+        _ = node.listen(tx_timer.clone()) => {},
+        _ = node.timer(tx_msg.clone(), tx_timer.subscribe()) => {},
+    }
+
+
     // let data = message::Request {
     //     term: 1,
     //     requests: Some(message::request::Requests::Vote(message::VoteRequest {

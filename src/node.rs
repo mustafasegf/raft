@@ -1,14 +1,17 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
+#![allow(unused)]
 
-use crate::parser::ArgsPeer;
+use anyhow::{Context, Result};
 use core::fmt::{Debug, Display};
+use futures::future::join_all;
 use prost::Message;
-use rand::RngCore;
+use rand::Rng;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::UdpSocket;
+use tokio::sync::broadcast::{Receiver, Sender};
+
+// TODO: change to udp
 
 use crate::message;
 
@@ -29,140 +32,137 @@ pub struct Node {
     // pub client: String,
     pub curent_term: u64,
     pub voted_for: Option<i32>,
-    pub listener: Option<TcpListener>,
+    pub socket: Option<UdpSocket>,
     // role: Role,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Peer {
-    id: i32,
-    server: String,
-    tx: Option<OwnedWriteHalf>,
-    rx: Option<OwnedReadHalf>,
+    pub id: i32,
+    pub server: String,
 }
 
 impl Node {
-    pub fn new(id: i32, server: String, peers: Vec<ArgsPeer>) -> Self {
+    pub fn new(id: i32, server: String, peers: Vec<Peer>) -> Self {
         Self {
             id,
             server,
-            peers: peers
-                .into_iter()
-                .map(|peer| Peer {
-                    id: peer.id,
-                    server: peer.server,
-                    ..Default::default()
-                })
-                .collect(),
+            peers,
             curent_term: 1,
             voted_for: None,
-            listener: None,
+            socket: None,
         }
     }
 
-    pub fn to_peer(&self) -> Peer {
-        Peer {
-            id: self.id,
-            server: self.server.clone(),
-            tx: None,
-            rx: None,
-        }
-    }
+    pub async fn start(&mut self) -> Result<()> {
+        let socket = UdpSocket::bind(&self.server).await?;
 
-    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let listener = TcpListener::bind(&self.server).await?;
-
-        self.listener = Some(listener);
-        println!("node {} binding on {}", &self.id, &self.server);
+        self.socket = Some(socket);
+        println!("binding on {}", &self.server);
         Ok(())
     }
+    pub async fn timer(&self, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) {
+        let mut rng = rand::thread_rng();
+        loop {
+            let random = rng.gen_range(1_000..3_000);
+            let duration = Duration::from_millis(random);
 
-    pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("node {} trying to connect", &self.id);
-        for peer in &mut self.peers {
-            let addr_server = peer.server.parse::<SocketAddr>()?;
+            println!("timer set to {:?}", &duration);
 
-            println!("node {} trying to connect to {}", &self.id, &peer.server);
-
-            let stream = TcpStream::connect(addr_server).await?;
-
-            println!(
-                "server {} is connected to {}",
-                &stream.peer_addr().unwrap(),
-                &peer.server
-            );
-            let (rx, tx) = stream.into_split();
-            peer.rx = Some(rx);
-            peer.tx = Some(tx);
-        }
-        println!("node {} connected to all peers", &self.id);
-        Ok(())
-    }
-
-    pub async fn listen(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("node {} trying to listen", &self.id);
-
-        let listener = loop {
-            let Some(listener) = self.listener.take() else {
+            tokio::select! {
+                _ = tokio::time::sleep(duration) => {
+                    println!("timer expired");
+                    tx_msg.send(()).unwrap();
+                },
+                _ = rx_timer.recv() => {
+                    println!("timer reset");
                     continue;
-                };
-            break listener;
-        };
+                },
 
-        // self.peers.iter_mut().for_each(|peer| {
-        //
-        // });
-
-        println!("node {} listener available at {}", &self.id, &self.server);
-        // let (stream, addr) = listener.accept().await?;
-        // println!("{} is connected to {}", &self.server, &addr);
-        // let (rx, tx) = stream.into_split();
-
-        // peer.rx = Some(rx);
-        // peer.tx = Some(tx);
-        Ok(())
+            };
+        }
     }
 
-    pub async fn send_msg(
-        &mut self,
-        msg: &message::Request,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        for peer in &mut self.peers {
-            peer.send_msg(msg).await?;
+    pub async fn listen(&self, tx_timer: Sender<()>) {
+        let socket = self.socket.as_ref().unwrap();
+        loop {
+            let mut buf = [0 as u8; 1];
+            socket.recv_from(&mut buf).await.unwrap();
+            let n = buf[0] as usize;
+            println!("received msg of size: {}", n);
+
+            let mut buf = vec![0 as u8; n + 1];
+            // let mut buf = Vec::with_capacity(n + 1);
+            socket.recv_from(&mut buf).await.unwrap();
+
+            if buf.len() != n + 1 {
+                println!("error receiving msg: {:?}", buf);
+                continue;
+            }
+
+            // let mut buf: Vec<u8> = vec![12, 8, 1, 18, 8, 8, 2, 16, 3, 24, 4, 32, 5];
+            println!("received msg: {:?}", &buf);
+
+            let res = message::Request::decode_length_delimited(&buf[..]);
+            if let Err(err) = res {
+                println!("error decoding msg: {:?}", err);
+                continue;
+            };
+
+            let res = res.unwrap();
+            println!("received msg: {:?} from {}", &res, &self.server);
+            tx_timer.send(()).unwrap();
         }
+    }
+
+    pub async fn sender(&self, mut rx_msg: Receiver<()>) {
+        loop {
+            rx_msg.recv().await.unwrap();
+            let msg = message::Request {
+                term: 1,
+                requests: Some(message::request::Requests::Vote(message::VoteRequest {
+                    term: 2,
+                    candidate_id: 3,
+                    last_log_idx: 4,
+                    last_log_term: 5,
+                })),
+            };
+
+            if let Err(err) = self.send_msg(&msg).await {
+                println!("error sending msg: {:?}", err);
+            };
+        }
+    }
+
+    pub async fn send_msg(&self, msg: &message::Request) -> Result<()> {
+        let socket = UdpSocket::bind("127.0.0.1:0").await?;
+        let mut handles = Vec::with_capacity(self.peers.len());
+
+        for (i, peer) in self.peers.iter().enumerate() {
+            handles.push(peer.send_msg(&socket, msg));
+        }
+        // TODO: handle errors
+        join_all(handles)
+            .await
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .for_each(|e| println!("error sending msg: {:?}", e));
+
         Ok(())
     }
 }
 
 impl Peer {
     pub fn new(id: i32, server: String) -> Self {
-        Self {
-            id,
-            server,
-            tx: None,
-            rx: None,
-        }
+        Self { id, server }
     }
 
-    pub async fn send_msg(
-        &mut self,
-        msg: &message::Request,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(tx) = &mut self.tx {
-            println!("sending msg: {:?} to {}", &msg, &self.server);
-            tx.write_all(&msg.encode_length_delimited_to_vec()).await?;
-        }
+    async fn send_msg(&self, socket: &UdpSocket, msg: &message::Request) -> Result<()> {
+        println!("sending msg: {:?} to {}", &msg, &self.server);
+        socket
+            .send_to(&msg.encode_length_delimited_to_vec(), &self.server)
+            .await
+            .context("can't send")?;
         Ok(())
-    }
-
-    pub async fn read_msg(&mut self) -> Result<message::Response, Box<dyn std::error::Error>> {
-        if let Some(rx) = &mut self.rx {
-            let mut buf: Vec<u8> = Vec::with_capacity(1024);
-            rx.read_to_end(&mut buf).await?;
-            let res = message::Response::decode(&buf[1..])?;
-            println!("received msg: {:?} from {}", &res, &self.server);
-            return Ok(res);
-        }
-        Ok(message::Response::default())
     }
 }
