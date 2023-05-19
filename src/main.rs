@@ -15,16 +15,16 @@ use clap::Parser;
 use node::Peer;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     // dbg!(&args);
 
-    let mut node = node::Node::new(args.id, args.server, args.peers);
-    if let Err(err) = node.start().await {
-        println!("Error: {}", err);
-    };
-    
+    let mut node = node::Node::builder_with_data(args.id, args.server, args.peers)
+        .start()
+        .await?
+        .build();
+
     let data = message::Request {
         term: 1,
         requests: Some(message::request::Requests::Vote(message::VoteRequest {
@@ -47,12 +47,11 @@ async fn main() {
     let (tx_timer, _) = broadcast::channel(1);
     let (tx_msg, _) = broadcast::channel(1);
 
-    tokio::select! {
+    Ok(tokio::select! {
         _ = node.sender(tx_msg.subscribe()) => {},
         _ = node.listen(tx_timer.clone()) => {},
         _ = node.timer(tx_msg.clone(), tx_timer.subscribe()) => {},
-    }
-
+    })
 
     // let data = message::Request {
     //     term: 1,

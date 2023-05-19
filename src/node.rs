@@ -20,8 +20,23 @@ use crate::message;
 //     Follower(NodeId),
 //     Candidate(NodeId),
 // }
+//
 
 #[derive(Default, Debug)]
+pub struct NodeBuilder<S> {
+    pub id: i32,
+    pub peers: Vec<Peer>,
+    pub server: String,
+
+    pub curent_term: u64,
+    pub voted_for: Option<i32>,
+    pub socket: S,
+}
+
+pub struct NoSocket;
+pub struct Socket(UdpSocket);
+
+#[derive(Debug)]
 pub struct Node {
     pub id: i32,
     pub peers: Vec<Peer>,
@@ -32,7 +47,7 @@ pub struct Node {
     // pub client: String,
     pub curent_term: u64,
     pub voted_for: Option<i32>,
-    pub socket: Option<UdpSocket>,
+    pub socket: UdpSocket,
     // role: Role,
 }
 
@@ -42,7 +57,7 @@ pub struct Peer {
     pub server: String,
 }
 
-impl Node {
+impl NodeBuilder<NoSocket> {
     pub fn new(id: i32, server: String, peers: Vec<Peer>) -> Self {
         Self {
             id,
@@ -50,17 +65,94 @@ impl Node {
             peers,
             curent_term: 1,
             voted_for: None,
-            socket: None,
+            socket: NoSocket,
         }
     }
 
-    pub async fn start(&mut self) -> Result<()> {
-        let socket = UdpSocket::bind(&self.server).await?;
-
-        self.socket = Some(socket);
-        println!("binding on {}", &self.server);
-        Ok(())
+    pub fn socket(self, socket: UdpSocket) -> NodeBuilder<Socket> {
+        let Self {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            ..
+        } = self;
+        NodeBuilder {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket: Socket(socket),
+        }
     }
+
+    pub async fn start(self) -> Result<NodeBuilder<Socket>> {
+        let socket = UdpSocket::bind(&self.server).await?;
+        let Self {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            ..
+        } = self;
+        Ok(NodeBuilder {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket: Socket(socket),
+        })
+    }
+}
+
+impl NodeBuilder<Socket> {
+    pub fn build(self) -> Node {
+        let Self {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket,
+        } = self;
+        Node {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket: socket.0,
+        }
+    }
+}
+
+impl Node {
+    pub fn builder() -> NodeBuilder<NoSocket> {
+        NodeBuilder {
+            id: 0,
+            server: String::new(),
+            peers: Vec::new(),
+            curent_term: 0,
+            voted_for: None,
+            socket: NoSocket,
+        }
+    }
+
+    pub fn builder_with_data(id: i32, server: String, peers: Vec<Peer>) -> NodeBuilder<NoSocket> {
+        NodeBuilder {
+            id,
+            server,
+            peers,
+            curent_term: 1,
+            voted_for: None,
+            socket: NoSocket,
+        }
+    }
+
     pub async fn timer(&self, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) {
         let mut rng = rand::thread_rng();
         loop {
@@ -72,6 +164,7 @@ impl Node {
             tokio::select! {
                 _ = tokio::time::sleep(duration) => {
                     println!("timer expired");
+
                     tx_msg.send(()).unwrap();
                 },
                 _ = rx_timer.recv() => {
@@ -84,12 +177,11 @@ impl Node {
     }
 
     pub async fn listen(&self, tx_timer: Sender<()>) {
-        let socket = self.socket.as_ref().unwrap();
+        let socket = &self.socket;
         loop {
             let mut buf = [0 as u8; 1];
             socket.recv_from(&mut buf).await.unwrap();
             let n = buf[0] as usize;
-            println!("received msg of size: {}", n);
 
             let mut buf = vec![0 as u8; n + 1];
             // let mut buf = Vec::with_capacity(n + 1);
@@ -100,9 +192,6 @@ impl Node {
                 continue;
             }
 
-            // let mut buf: Vec<u8> = vec![12, 8, 1, 18, 8, 8, 2, 16, 3, 24, 4, 32, 5];
-            println!("received msg: {:?}", &buf);
-
             let res = message::Request::decode_length_delimited(&buf[..]);
             if let Err(err) = res {
                 println!("error decoding msg: {:?}", err);
@@ -110,7 +199,8 @@ impl Node {
             };
 
             let res = res.unwrap();
-            println!("received msg: {:?} from {}", &res, &self.server);
+            // println!("received msg: {:?} from {}", &res, &self.server);
+            println!("received msg");
             tx_timer.send(()).unwrap();
         }
     }
@@ -158,7 +248,8 @@ impl Peer {
     }
 
     async fn send_msg(&self, socket: &UdpSocket, msg: &message::Request) -> Result<()> {
-        println!("sending msg: {:?} to {}", &msg, &self.server);
+        // println!("sending msg: {:?} to {}", &msg, &self.server);
+        println!("sending msg to {:?}", &self.server);
         socket
             .send_to(&msg.encode_length_delimited_to_vec(), &self.server)
             .await
