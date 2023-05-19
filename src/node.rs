@@ -1,14 +1,14 @@
 #![allow(unused)]
 
 use anyhow::{Context, Result};
+use std::net::SocketAddr;
 use core::fmt::{Debug, Display};
 use futures::future::join_all;
 use prost::Message;
 use rand::Rng;
-use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UdpSocket;
+use tokio::net::{UdpSocket, ToSocketAddrs};
 use tokio::sync::broadcast::{Receiver, Sender};
 
 // TODO: change to udp
@@ -23,24 +23,26 @@ use crate::message;
 //
 
 #[derive(Default, Debug)]
-pub struct NodeBuilder<S> {
+pub struct NodeBuilder<Soc, Ser> {
     pub id: i32,
     pub peers: Vec<Peer>,
-    pub server: String,
+    pub server: Ser,
 
     pub curent_term: u64,
     pub voted_for: Option<i32>,
-    pub socket: S,
+    pub socket: Soc,
 }
 
 pub struct NoSocket;
 pub struct Socket(UdpSocket);
 
+pub struct NoServer;
+
 #[derive(Debug)]
 pub struct Node {
     pub id: i32,
     pub peers: Vec<Peer>,
-    pub server: String,
+    pub server: SocketAddr,
 
     // cant use this this
     // use mailbox and channel
@@ -57,19 +59,42 @@ pub struct Peer {
     pub server: String,
 }
 
-impl NodeBuilder<NoSocket> {
-    pub fn new(id: i32, server: String, peers: Vec<Peer>) -> Self {
+impl NodeBuilder<NoSocket, NoServer> {
+    pub fn new() -> Self {
         Self {
-            id,
-            server,
-            peers,
+            id: 0,
+            server: NoServer,
+            peers: Vec::new(),
             curent_term: 1,
             voted_for: None,
             socket: NoSocket,
         }
     }
 
-    pub fn socket(self, socket: UdpSocket) -> NodeBuilder<Socket> {
+    pub async fn server(self, server: impl ToSocketAddrs) -> Result<NodeBuilder<NoSocket, SocketAddr>> {
+        let server = tokio::net::lookup_host(server).await?.next().context("no server")?;
+        let Self {
+            id,
+            peers,
+            curent_term,
+            voted_for,
+            ..
+        } = self;
+        Ok(NodeBuilder {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket: NoSocket,
+        })
+    }
+
+}
+
+impl NodeBuilder<NoSocket, SocketAddr> {
+
+    pub fn socket(self, socket: UdpSocket) -> NodeBuilder<Socket, SocketAddr> {
         let Self {
             id,
             server,
@@ -88,7 +113,7 @@ impl NodeBuilder<NoSocket> {
         }
     }
 
-    pub async fn start(self) -> Result<NodeBuilder<Socket>> {
+    pub async fn start(self) -> Result<NodeBuilder<Socket, SocketAddr>> {
         let socket = UdpSocket::bind(&self.server).await?;
         let Self {
             id,
@@ -109,7 +134,8 @@ impl NodeBuilder<NoSocket> {
     }
 }
 
-impl NodeBuilder<Socket> {
+
+impl NodeBuilder<Socket, SocketAddr> {
     pub fn build(self) -> Node {
         let Self {
             id,
@@ -131,10 +157,10 @@ impl NodeBuilder<Socket> {
 }
 
 impl Node {
-    pub fn builder() -> NodeBuilder<NoSocket> {
+    pub fn builder() -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
             id: 0,
-            server: String::new(),
+            server: NoServer,
             peers: Vec::new(),
             curent_term: 0,
             voted_for: None,
@@ -142,10 +168,10 @@ impl Node {
         }
     }
 
-    pub fn builder_with_data(id: i32, server: String, peers: Vec<Peer>) -> NodeBuilder<NoSocket> {
+    pub fn builder_with_data(id: i32, peers: Vec<Peer>) -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
             id,
-            server,
+            server: NoServer,
             peers,
             curent_term: 1,
             voted_for: None,

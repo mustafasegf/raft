@@ -20,21 +20,23 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // dbg!(&args);
 
-    let mut node = node::Node::builder_with_data(args.id, args.server, args.peers)
+    let mut node = node::Node::builder_with_data(args.id, args.peers)
+        .server(&args.server)
+        .await?
         .start()
         .await?
         .build();
 
-    let data = message::Request {
-        term: 1,
-        requests: Some(message::request::Requests::Vote(message::VoteRequest {
-            term: 2,
-            candidate_id: 3,
-            last_log_idx: 4,
-            last_log_term: 5,
-        })),
-    };
-
+    // let data = message::Request {
+    //     term: 1,
+    //     requests: Some(message::request::Requests::Vote(message::VoteRequest {
+    //         term: 2,
+    //         candidate_id: 3,
+    //         last_log_idx: 4,
+    //         last_log_term: 5,
+    //     })),
+    // };
+    //
     // let buf = data.encode_length_delimited_to_vec();
     // let buf: Vec<u8> = vec![12, 8, 1, 18, 8, 8, 2, 16, 3, 24, 4, 32, 5];
     //
