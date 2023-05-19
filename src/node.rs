@@ -4,13 +4,14 @@ use anyhow::{Context, Result};
 use core::fmt::{Debug, Display};
 use futures::future::join_all;
 use prost::Message;
+use rand::rngs::ThreadRng;
 use rand::Rng;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::broadcast::{Receiver, Sender};
-use std::marker::PhantomData;
 
 use crate::message;
 
@@ -31,7 +32,6 @@ pub struct NodeBuilder<Soc, Ser> {
     pub voted_for: Option<i32>,
     pub socket: Soc,
 }
-
 
 pub struct NoSocket;
 pub struct Socket(UdpSocket);
@@ -186,6 +186,23 @@ impl NodeBuilder<Socket, SocketAddr> {
     }
 }
 
+pub async fn timer(random: u64, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) -> Result<()> {
+    let duration = Duration::from_millis(random);
+
+    println!("timer set to {:?}", &duration);
+
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => {
+            println!("timer expired");
+            tx_msg.send(())?;
+        },
+        _ = rx_timer.recv() => {
+            println!("timer reset");
+        },
+
+    };
+    Ok(())
+}
 
 impl<Role> Node<Role> {
     pub fn builder() -> NodeBuilder<NoSocket, NoServer> {
@@ -203,33 +220,10 @@ impl<Role> Node<Role> {
         NodeBuilder {
             id,
             server: NoServer,
-            peers : Vec::new(),
+            peers: Vec::new(),
             curent_term: 1,
             voted_for: None,
             socket: NoSocket,
-        }
-    }
-
-    pub async fn timer(&self, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) {
-        let mut rng = rand::thread_rng();
-        loop {
-            let random = rng.gen_range(1_000..3_000);
-            let duration = Duration::from_millis(random);
-
-            println!("timer set to {:?}", &duration);
-
-            tokio::select! {
-                _ = tokio::time::sleep(duration) => {
-                    println!("timer expired");
-
-                    tx_msg.send(()).unwrap();
-                },
-                _ = rx_timer.recv() => {
-                    println!("timer reset");
-                    continue;
-                },
-
-            };
         }
     }
 

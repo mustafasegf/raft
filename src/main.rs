@@ -3,12 +3,13 @@
 use itertools::Itertools;
 use prost::Message;
 use raft::message;
-use raft::node::{self, Node, Follower};
+use raft::node::{self, timer, Follower, Node};
 use raft::parser::Args;
 use rand::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
+use tokio::task;
 use tokio::time::{timeout, Duration};
 
 use clap::Parser;
@@ -50,10 +51,29 @@ async fn main() -> Result<(), anyhow::Error> {
     let (tx_timer, _) = broadcast::channel(1);
     let (tx_msg, _) = broadcast::channel(1);
 
+    task::spawn({
+        let tx_timer = tx_timer.clone();
+        let tx_msg = tx_msg.clone();
+
+        // TODO: add optional seed
+        let mut rng: StdRng = SeedableRng::from_entropy();
+
+        async move {
+            loop {
+                let random = rng.gen_range(1_000..1_500);
+                if let Err(err) = timer(random, tx_msg.clone(), tx_timer.subscribe()).await {
+                    println!("error sending msg: {:?}", err);
+                    return;
+                };
+            }
+        }
+    });
+
     Ok(tokio::select! {
         _ = node.sender(tx_msg.subscribe()) => {},
         _ = node.listen(tx_timer.clone()) => {},
-        _ = node.timer(tx_msg.clone(), tx_timer.subscribe()) => {},
+        // _ = node.timer(tx_msg.clone(), tx_timer.subscribe()) => {},
+
     })
 
     // let data = message::Request {
