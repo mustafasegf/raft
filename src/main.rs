@@ -3,7 +3,7 @@
 use itertools::Itertools;
 use prost::Message;
 use raft::message;
-use raft::node::{self, Node};
+use raft::node::{self, Node, Follower};
 use raft::parser::Args;
 use rand::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,7 +20,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // dbg!(&args);
 
-    let mut node = node::Node::builder_with_data(args.id)
+    let mut node = node::Node::<Follower>::builder_with_data(args.id)
         .peers(args.peers)
         .server(&args.server)
         .await?

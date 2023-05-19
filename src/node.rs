@@ -10,8 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::broadcast::{Receiver, Sender};
-
-// TODO: change to udp
+use std::marker::PhantomData;
 
 use crate::message;
 
@@ -33,13 +32,18 @@ pub struct NodeBuilder<Soc, Ser> {
     pub socket: Soc,
 }
 
+
 pub struct NoSocket;
 pub struct Socket(UdpSocket);
 
 pub struct NoServer;
 
+pub struct Leader;
+pub struct Candidate;
+pub struct Follower;
+
 #[derive(Debug)]
-pub struct Node {
+pub struct Node<Role = Follower> {
     pub id: i32,
     pub peers: Vec<Peer>,
     pub server: SocketAddr,
@@ -50,7 +54,7 @@ pub struct Node {
     pub curent_term: u64,
     pub voted_for: Option<i32>,
     pub socket: UdpSocket,
-    // role: Role,
+    role: PhantomData<Role>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -138,27 +142,6 @@ impl NodeBuilder<NoSocket, SocketAddr> {
     }
 }
 
-impl NodeBuilder<Socket, SocketAddr> {
-    pub fn build(self) -> Node {
-        let Self {
-            id,
-            server,
-            peers,
-            curent_term,
-            voted_for,
-            socket,
-        } = self;
-        Node {
-            id,
-            server,
-            peers,
-            curent_term,
-            voted_for,
-            socket: socket.0,
-        }
-    }
-}
-
 impl<Soc, Ser> NodeBuilder<Soc, Ser> {
     pub fn peers(self, peers: Vec<Peer>) -> NodeBuilder<Soc, Ser> {
         let Self {
@@ -181,7 +164,30 @@ impl<Soc, Ser> NodeBuilder<Soc, Ser> {
     }
 }
 
-impl Node {
+impl NodeBuilder<Socket, SocketAddr> {
+    pub fn build(self) -> Node<Follower> {
+        let Self {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket,
+        } = self;
+        Node {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket: socket.0,
+            role: PhantomData,
+        }
+    }
+}
+
+
+impl<Role> Node<Role> {
     pub fn builder() -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
             id: 0,
