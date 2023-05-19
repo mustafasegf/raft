@@ -20,7 +20,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // dbg!(&args);
 
-    let mut node = node::Node::builder_with_data(args.id, args.peers)
+    let mut node = node::Node::builder_with_data(args.id)
+        .peers(args.peers)
         .server(&args.server)
         .await?
         .start()

@@ -1,14 +1,14 @@
 #![allow(unused)]
 
 use anyhow::{Context, Result};
-use std::net::SocketAddr;
 use core::fmt::{Debug, Display};
 use futures::future::join_all;
 use prost::Message;
 use rand::Rng;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UdpSocket, ToSocketAddrs};
+use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio::sync::broadcast::{Receiver, Sender};
 
 // TODO: change to udp
@@ -71,8 +71,14 @@ impl NodeBuilder<NoSocket, NoServer> {
         }
     }
 
-    pub async fn server(self, server: impl ToSocketAddrs) -> Result<NodeBuilder<NoSocket, SocketAddr>> {
-        let server = tokio::net::lookup_host(server).await?.next().context("no server")?;
+    pub async fn server(
+        self,
+        server: impl ToSocketAddrs,
+    ) -> Result<NodeBuilder<NoSocket, SocketAddr>> {
+        let server = tokio::net::lookup_host(server)
+            .await?
+            .next()
+            .context("no server")?;
         let Self {
             id,
             peers,
@@ -89,11 +95,9 @@ impl NodeBuilder<NoSocket, NoServer> {
             socket: NoSocket,
         })
     }
-
 }
 
 impl NodeBuilder<NoSocket, SocketAddr> {
-
     pub fn socket(self, socket: UdpSocket) -> NodeBuilder<Socket, SocketAddr> {
         let Self {
             id,
@@ -134,7 +138,6 @@ impl NodeBuilder<NoSocket, SocketAddr> {
     }
 }
 
-
 impl NodeBuilder<Socket, SocketAddr> {
     pub fn build(self) -> Node {
         let Self {
@@ -156,6 +159,28 @@ impl NodeBuilder<Socket, SocketAddr> {
     }
 }
 
+impl<Soc, Ser> NodeBuilder<Soc, Ser> {
+    pub fn peers(self, peers: Vec<Peer>) -> NodeBuilder<Soc, Ser> {
+        let Self {
+            id,
+            server,
+            curent_term,
+            voted_for,
+            socket,
+            ..
+        } = self;
+
+        NodeBuilder {
+            id,
+            server,
+            peers,
+            curent_term,
+            voted_for,
+            socket,
+        }
+    }
+}
+
 impl Node {
     pub fn builder() -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
@@ -168,11 +193,11 @@ impl Node {
         }
     }
 
-    pub fn builder_with_data(id: i32, peers: Vec<Peer>) -> NodeBuilder<NoSocket, NoServer> {
+    pub fn builder_with_data(id: i32) -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
             id,
             server: NoServer,
-            peers,
+            peers : Vec::new(),
             curent_term: 1,
             voted_for: None,
             socket: NoSocket,
