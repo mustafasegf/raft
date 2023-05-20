@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use futures::future::join_all;
 use itertools::Itertools;
 use prost::Message;
 use raft::message;
@@ -51,7 +52,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let (tx_timer, _) = broadcast::channel(1);
     let (tx_msg, _) = broadcast::channel(1);
 
-    task::spawn({
+    let mut handler = Vec::new();
+    handler.push(task::spawn({
         let tx_timer = tx_timer.clone();
         let tx_msg = tx_msg.clone();
 
@@ -62,13 +64,13 @@ async fn main() -> Result<(), anyhow::Error> {
             loop {
                 if let Err(err) = timer(&mut rng, tx_msg.clone(), tx_timer.subscribe()).await {
                     println!("error sending msg: {:?}", err);
-                    return;
+                    continue;
                 };
             }
         }
-    });
+    }));
 
-    task::spawn({
+    handler.push(task::spawn({
         let tx_timer = tx_timer.clone();
 
         async move {
@@ -79,9 +81,9 @@ async fn main() -> Result<(), anyhow::Error> {
                 };
             }
         }
-    });
+    }));
 
-    task::spawn({
+    handler.push(task::spawn({
         let tx_msg = tx_msg.clone();
 
         async move {
@@ -92,7 +94,11 @@ async fn main() -> Result<(), anyhow::Error> {
                 };
             }
         }
-    });
+    }));
+
+    for handle in join_all(handler).await{
+        handle?;
+    };
 
     Ok(())
 
@@ -105,12 +111,6 @@ async fn main() -> Result<(), anyhow::Error> {
     //         last_log_term: 5,
     //     })),
     // };
-
-    // node1.send_msg(&data).await.unwrap();
-
-    // node2.connect().await.unwrap();
-    // node3.connect().await.unwrap();
-
     // let data = message::Request {
     //     term: 1,
     //     requests: Some(message::request::Requests::Vote(message::VoteRequest {
