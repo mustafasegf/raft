@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
+async-trait = "0.1.68"
 clap = { version = "4.2.7", features = ["derive", "env", "string"] }
 futures = "0.3.28"
 itertools = "0.10.5"

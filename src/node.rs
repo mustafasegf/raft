@@ -1,11 +1,13 @@
 #![allow(unused)]
 
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use core::fmt::{Debug, Display};
 use futures::future::join_all;
 use prost::Message;
 use rand::rngs::{StdRng, ThreadRng};
 use rand::Rng;
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -15,22 +17,25 @@ use tokio::sync::broadcast::{Receiver, Sender};
 
 use crate::message;
 
-// pub enum Role<NodeId> {
-//     Leader(NodeId),
-//     Follower(NodeId),
-//     Candidate(NodeId),
-// }
-//
+#[derive(Debug, Clone)]
+pub enum Role {
+    Leader,
+    Follower,
+    Candidate { votes: u64, vote_set: HashSet<u64> },
+}
 
 #[derive(Default, Debug)]
 pub struct NodeBuilder<Soc, Ser> {
-    pub id: i32,
+    pub id: u64,
     pub peers: Vec<Peer>,
     pub server: Ser,
 
     pub curent_term: u64,
-    pub voted_for: Option<i32>,
+    pub voted_for: Option<u64>,
     pub socket: Soc,
+
+    pub log_index: u64,
+    pub log_term: u64,
 }
 
 pub struct NoSocket;
@@ -42,29 +47,29 @@ pub struct Leader;
 pub struct Candidate;
 pub struct Follower;
 
-#[derive(Debug)]
-pub struct Node<Role = Follower> {
-    pub id: i32,
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub id: u64,
     pub peers: Vec<Peer>,
     pub server: SocketAddr,
 
-    // cant use this this
-    // use mailbox and channel
-    // pub client: String,
     pub curent_term: u64,
-    pub voted_for: Option<i32>,
-    role: PhantomData<Role>,
+    pub voted_for: Option<u64>,
+    pub role: Role,
+
+    pub log_index: u64,
+    pub log_term: u64,
 }
 
 pub struct NodeSocket {
-    pub id: i32,
+    pub id: u64,
     pub socket: UdpSocket,
     pub server: SocketAddr,
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct Peer {
-    pub id: i32,
+    pub id: u64,
     pub server: String,
 }
 
@@ -77,6 +82,8 @@ impl NodeBuilder<NoSocket, NoServer> {
             curent_term: 1,
             voted_for: None,
             socket: NoSocket,
+            log_index: 0,
+            log_term: 0,
         }
     }
 
@@ -93,6 +100,8 @@ impl NodeBuilder<NoSocket, NoServer> {
             peers,
             curent_term,
             voted_for,
+            log_index,
+            log_term,
             ..
         } = self;
         Ok(NodeBuilder {
@@ -101,6 +110,8 @@ impl NodeBuilder<NoSocket, NoServer> {
             peers,
             curent_term,
             voted_for,
+            log_index,
+            log_term,
             socket: NoSocket,
         })
     }
@@ -114,6 +125,8 @@ impl NodeBuilder<NoSocket, SocketAddr> {
             peers,
             curent_term,
             voted_for,
+            log_index,
+            log_term,
             ..
         } = self;
         NodeBuilder {
@@ -123,6 +136,8 @@ impl NodeBuilder<NoSocket, SocketAddr> {
             curent_term,
             voted_for,
             socket: Socket(socket),
+            log_index,
+            log_term,
         }
     }
 
@@ -134,6 +149,8 @@ impl NodeBuilder<NoSocket, SocketAddr> {
             peers,
             curent_term,
             voted_for,
+            log_index,
+            log_term,
             ..
         } = self;
         Ok(NodeBuilder {
@@ -143,6 +160,8 @@ impl NodeBuilder<NoSocket, SocketAddr> {
             curent_term,
             voted_for,
             socket: Socket(socket),
+            log_index,
+            log_term,
         })
     }
 }
@@ -155,6 +174,8 @@ impl<Soc, Ser> NodeBuilder<Soc, Ser> {
             curent_term,
             voted_for,
             socket,
+            log_index,
+            log_term,
             ..
         } = self;
 
@@ -165,12 +186,14 @@ impl<Soc, Ser> NodeBuilder<Soc, Ser> {
             curent_term,
             voted_for,
             socket,
+            log_index,
+            log_term,
         }
     }
 }
 
 impl NodeBuilder<Socket, SocketAddr> {
-    pub fn build(self) -> (Node<Follower>, NodeSocket) {
+    pub fn build(self) -> (Node, NodeSocket) {
         let Self {
             id,
             server,
@@ -178,6 +201,8 @@ impl NodeBuilder<Socket, SocketAddr> {
             curent_term,
             voted_for,
             socket,
+            log_index,
+            log_term,
         } = self;
 
         let node = Node {
@@ -186,7 +211,9 @@ impl NodeBuilder<Socket, SocketAddr> {
             peers,
             curent_term,
             voted_for,
-            role: PhantomData,
+            role: Role::Follower,
+            log_index,
+            log_term,
         };
 
         let node_socket = NodeSocket {
@@ -199,7 +226,11 @@ impl NodeBuilder<Socket, SocketAddr> {
     }
 }
 
-pub async fn timer(rng: &mut StdRng, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) -> Result<()> {
+pub async fn timer(
+    rng: &mut StdRng,
+    tx_timer: &Sender<()>,
+    rx_msg: &mut Receiver<message::Data>,
+) -> Result<()> {
     let random = rng.gen_range(2_000..3_000);
     let duration = Duration::from_millis(random);
 
@@ -208,9 +239,9 @@ pub async fn timer(rng: &mut StdRng, tx_msg: Sender<()>, mut rx_timer: Receiver<
     tokio::select! {
         _ = tokio::time::sleep(duration) => {
             println!("timer expired");
-            tx_msg.send(())?;
+            tx_timer.send(())?;
         },
-        _ = rx_timer.recv() => {
+        msg = rx_msg.recv() => {
             println!("timer reset");
         },
 
@@ -219,7 +250,7 @@ pub async fn timer(rng: &mut StdRng, tx_msg: Sender<()>, mut rx_timer: Receiver<
 }
 
 impl NodeSocket {
-    pub async fn listen(&self, tx_timer: Sender<()>) -> Result<()> {
+    pub async fn listen(&self, tx_msg: &Sender<message::Data>) -> Result<()> {
         let mut socket = &self.socket;
 
         let mut buf = [0 as u8; 1];
@@ -235,21 +266,24 @@ impl NodeSocket {
             return Err(anyhow!("error receiving msg"));
         }
 
-        let res = message::Request::decode_length_delimited(&buf[..]);
-        if let Err(err) = res {
-            println!("error decoding msg: {:?}", err);
-            return Err(anyhow!("error decoding msg"));
+        let res = message::Data::decode_length_delimited(&buf[..]);
+        let msg = match res {
+            Ok(msg) => msg,
+            Err(err) => {
+                println!("error decoding msg: {:?}", err);
+                return Err(anyhow!("error decoding msg"));
+            }
         };
 
-        let res = res?;
         // println!("received msg: {:?} from {}", &res, &self.server);
         println!("received msg");
-        tx_timer.send(())?;
+        tx_msg.send(msg)?;
+
         Ok(())
     }
 }
 
-impl<Role> Node<Role> {
+impl Node {
     pub fn builder() -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
             id: 0,
@@ -258,10 +292,12 @@ impl<Role> Node<Role> {
             curent_term: 0,
             voted_for: None,
             socket: NoSocket,
+            log_index: 0,
+            log_term: 0,
         }
     }
 
-    pub fn builder_with_data(id: i32) -> NodeBuilder<NoSocket, NoServer> {
+    pub fn builder_with_data(id: u64) -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
             id,
             server: NoServer,
@@ -269,31 +305,33 @@ impl<Role> Node<Role> {
             curent_term: 1,
             voted_for: None,
             socket: NoSocket,
+            log_index: 0,
+            log_term: 0,
         }
     }
 
-    pub async fn sender(&self, mut rx_msg: Receiver<()>) -> Result<()> {
-        rx_msg.recv().await.unwrap();
-        let msg = message::Request {
-            term: 1,
-            requests: Some(message::request::Requests::Vote(message::VoteRequest {
-                term: 2,
-                candidate_id: 3,
-                last_log_idx: 4,
-                last_log_term: 5,
-            })),
-        };
+    // pub async fn sender(&self, mut rx_msg: Receiver<()>) -> Result<()> {
+    //     rx_msg.recv().await.unwrap();
+    //     let msg = message::Data {
+    //         term: 1,
+    //         requests: Some(message::request::Requests::Vote(message::VoteRequest {
+    //             term: 2,
+    //             candidate_id: 3,
+    //             last_log_idx: 4,
+    //             last_log_term: 5,
+    //         })),
+    //     };
+    //
+    //     match self.send_msg(&msg).await {
+    //         Err(err) => {
+    //             println!("error sending msg: {:?}", err);
+    //             Err(anyhow!("error sending msg"))
+    //         }
+    //         _ => Ok(()),
+    //     }
+    // }
 
-        match self.send_msg(&msg).await {
-            Err(err) => {
-                println!("error sending msg: {:?}", err);
-                Err(anyhow!("error sending msg"))
-            }
-            _ => Ok(()),
-        }
-    }
-
-    pub async fn send_msg(&self, msg: &message::Request) -> Result<()> {
+    pub async fn send_msg(&self, msg: &message::Data) -> Result<()> {
         let socket = UdpSocket::bind("127.0.0.1:0").await?;
         let mut handles = Vec::with_capacity(self.peers.len());
 
@@ -309,14 +347,94 @@ impl<Role> Node<Role> {
 
         Ok(())
     }
+
+    pub async fn step(
+        &mut self,
+        tx_msg: &Sender<message::Data>,
+        rx_msg: &mut Receiver<message::Data>,
+        tx_timer: &Sender<()>,
+        rx_timer: &mut Receiver<()>,
+    ) -> Result<()> {
+        match &self {
+            Node {
+                role: Role::Follower,
+                ..
+            } => {
+                println!("follower");
+                tokio::select! {
+                    msg = rx_timer.recv() => {
+                        if msg.is_err() {
+                          println!("error receiving msg: {:?}", msg);
+                          return Err(anyhow!("error receiving msg"));
+                        };
+
+                        println!("sending vote request");
+                        self.role = Role::Candidate{votes: 1, vote_set: HashSet::new()};
+
+                        let msg = message::Data {
+                            msg_type: Some(message::data::MsgType::Vote(message::VoteRequest {
+                                term: self.curent_term + 1,
+                                candidate_id: self.id,
+                                last_log_idx: self.log_index,
+                                last_log_term: self.log_term,
+                            }))
+
+                        };
+
+                        self.send_msg(&msg).await?;
+                    },
+                    msg = rx_msg.recv() => {
+                        let msg = msg?;
+                        match msg.msg_type {
+                            Some(message::data::MsgType::Vote(vote_request)) => {
+                                println!("vote request: {:?}", vote_request);
+                                if vote_request.term > self.curent_term {
+                                    self.curent_term = vote_request.term;
+                                    self.voted_for = Some(vote_request.candidate_id);
+                                    self.role = Role::Follower;
+
+                                    let msg = message::Data {
+                                        msg_type: Some(message::data::MsgType::Response(message::Response {
+                                            term: self.curent_term,
+                                            status: true,
+                                        }))
+                                    };
+
+                                    self.send_msg(&msg).await?;
+                                }
+                            },
+                            _ => {},
+                        }
+
+                    },
+                };
+
+                Ok(())
+            }
+            Node {
+                role: Role::Candidate { votes, vote_set },
+                ..
+            } => {
+                println!("candidate");
+
+                Ok(())
+            }
+            Node {
+                role: Role::Leader, ..
+            } => {
+                println!("leader");
+                Ok(())
+            }
+        }
+    }
 }
 
 impl Peer {
-    pub fn new(id: i32, server: String) -> Self {
+    pub fn new(id: u64, server: String) -> Self {
         Self { id, server }
     }
 
-    async fn send_msg(&self, socket: &UdpSocket, msg: &message::Request) -> Result<()> {
+    async fn send_msg(&self, socket: &UdpSocket, msg: &message::Data) -> Result<()> {
         // println!("sending msg: {:?} to {}", &msg, &self.server);
         println!("sending msg to {:?}", &self.server);
         socket

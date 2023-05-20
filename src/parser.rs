@@ -9,7 +9,7 @@ use crate::node::Peer;
 pub struct Args {
     /// node id
     #[arg(long)]
-    pub id: i32,
+    pub id: u64,
 
     /// server address
     #[arg(short, long)]
@@ -33,7 +33,7 @@ fn validate_peers(peer: &str) -> Result<Peer, String> {
         
         };
 
-    let Ok(id) = id.parse::<i32>() else  {
+    let Ok(id) = id.parse() else  {
         return Err(format!("peer {} id is invalid", peer));
     };
 
