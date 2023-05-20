@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use core::fmt::{Debug, Display};
 use futures::future::join_all;
 use prost::Message;
@@ -57,7 +57,7 @@ pub struct Node<Role = Follower> {
 }
 
 pub struct NodeSocket {
-    pub id : i32,
+    pub id: i32,
     pub socket: UdpSocket,
     pub server: SocketAddr,
 }
@@ -194,7 +194,7 @@ impl NodeBuilder<Socket, SocketAddr> {
             socket: socket.0,
             server,
         };
-        
+
         (node, node_socket)
     }
 }
@@ -249,7 +249,6 @@ impl NodeSocket {
     }
 }
 
-
 impl<Role> Node<Role> {
     pub fn builder() -> NodeBuilder<NoSocket, NoServer> {
         NodeBuilder {
@@ -273,22 +272,24 @@ impl<Role> Node<Role> {
         }
     }
 
-    pub async fn sender(&self, mut rx_msg: Receiver<()>) {
-        loop {
-            rx_msg.recv().await.unwrap();
-            let msg = message::Request {
-                term: 1,
-                requests: Some(message::request::Requests::Vote(message::VoteRequest {
-                    term: 2,
-                    candidate_id: 3,
-                    last_log_idx: 4,
-                    last_log_term: 5,
-                })),
-            };
+    pub async fn sender(&self, mut rx_msg: Receiver<()>) -> Result<()> {
+        rx_msg.recv().await.unwrap();
+        let msg = message::Request {
+            term: 1,
+            requests: Some(message::request::Requests::Vote(message::VoteRequest {
+                term: 2,
+                candidate_id: 3,
+                last_log_idx: 4,
+                last_log_term: 5,
+            })),
+        };
 
-            if let Err(err) = self.send_msg(&msg).await {
+        match self.send_msg(&msg).await {
+            Err(err) => {
                 println!("error sending msg: {:?}", err);
-            };
+                Err(anyhow!("error sending msg"))
+            }
+            _ => Ok(()),
         }
     }
 

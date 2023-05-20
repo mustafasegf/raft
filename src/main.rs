@@ -81,12 +81,20 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     });
 
-    Ok(tokio::select! {
-        _ = node.sender(tx_msg.subscribe()) => {},
-        // _ = node.listen(tx_timer.clone()) => {},
-        // _ = node.timer(tx_msg.clone(), tx_timer.subscribe()) => {},
+    task::spawn({
+        let tx_msg = tx_msg.clone();
 
-    })
+        async move {
+            loop {
+                if let Err(err) = node.sender(tx_msg.subscribe()).await {
+                    println!("error sending msg: {:?}", err);
+                    continue;
+                };
+            }
+        }
+    });
+
+    Ok(())
 
     // let data = message::Request {
     //     term: 1,
