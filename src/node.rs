@@ -1,10 +1,10 @@
 #![allow(unused)]
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use core::fmt::{Debug, Display};
 use futures::future::join_all;
 use prost::Message;
-use rand::rngs::ThreadRng;
+use rand::rngs::{StdRng, ThreadRng};
 use rand::Rng;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
@@ -53,8 +53,13 @@ pub struct Node<Role = Follower> {
     // pub client: String,
     pub curent_term: u64,
     pub voted_for: Option<i32>,
-    pub socket: UdpSocket,
     role: PhantomData<Role>,
+}
+
+pub struct NodeSocket {
+    pub id : i32,
+    pub socket: UdpSocket,
+    pub server: SocketAddr,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -165,7 +170,7 @@ impl<Soc, Ser> NodeBuilder<Soc, Ser> {
 }
 
 impl NodeBuilder<Socket, SocketAddr> {
-    pub fn build(self) -> Node<Follower> {
+    pub fn build(self) -> (Node<Follower>, NodeSocket) {
         let Self {
             id,
             server,
@@ -174,19 +179,28 @@ impl NodeBuilder<Socket, SocketAddr> {
             voted_for,
             socket,
         } = self;
-        Node {
+
+        let node = Node {
             id,
             server,
             peers,
             curent_term,
             voted_for,
-            socket: socket.0,
             role: PhantomData,
-        }
+        };
+
+        let node_socket = NodeSocket {
+            id,
+            socket: socket.0,
+            server,
+        };
+        
+        (node, node_socket)
     }
 }
 
-pub async fn timer(random: u64, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) -> Result<()> {
+pub async fn timer(rng: &mut StdRng, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) -> Result<()> {
+    let random = rng.gen_range(2_000..3_000);
     let duration = Duration::from_millis(random);
 
     println!("timer set to {:?}", &duration);
@@ -203,6 +217,38 @@ pub async fn timer(random: u64, tx_msg: Sender<()>, mut rx_timer: Receiver<()>) 
     };
     Ok(())
 }
+
+impl NodeSocket {
+    pub async fn listen(&self, tx_timer: Sender<()>) -> Result<()> {
+        let mut socket = &self.socket;
+
+        let mut buf = [0 as u8; 1];
+        socket.recv_from(&mut buf).await?;
+        let n = buf[0] as usize;
+
+        let mut buf = vec![0 as u8; n + 1];
+        // let mut buf = Vec::with_capacity(n + 1);
+        socket.recv_from(&mut buf).await?;
+
+        if buf.len() != n + 1 {
+            println!("error receiving msg: {:?}", buf);
+            return Err(anyhow!("error receiving msg"));
+        }
+
+        let res = message::Request::decode_length_delimited(&buf[..]);
+        if let Err(err) = res {
+            println!("error decoding msg: {:?}", err);
+            return Err(anyhow!("error decoding msg"));
+        };
+
+        let res = res?;
+        // println!("received msg: {:?} from {}", &res, &self.server);
+        println!("received msg");
+        tx_timer.send(())?;
+        Ok(())
+    }
+}
+
 
 impl<Role> Node<Role> {
     pub fn builder() -> NodeBuilder<NoSocket, NoServer> {
@@ -224,35 +270,6 @@ impl<Role> Node<Role> {
             curent_term: 1,
             voted_for: None,
             socket: NoSocket,
-        }
-    }
-
-    pub async fn listen(&self, tx_timer: Sender<()>) {
-        let socket = &self.socket;
-        loop {
-            let mut buf = [0 as u8; 1];
-            socket.recv_from(&mut buf).await.unwrap();
-            let n = buf[0] as usize;
-
-            let mut buf = vec![0 as u8; n + 1];
-            // let mut buf = Vec::with_capacity(n + 1);
-            socket.recv_from(&mut buf).await.unwrap();
-
-            if buf.len() != n + 1 {
-                println!("error receiving msg: {:?}", buf);
-                continue;
-            }
-
-            let res = message::Request::decode_length_delimited(&buf[..]);
-            if let Err(err) = res {
-                println!("error decoding msg: {:?}", err);
-                continue;
-            };
-
-            let res = res.unwrap();
-            // println!("received msg: {:?} from {}", &res, &self.server);
-            println!("received msg");
-            tx_timer.send(()).unwrap();
         }
     }
 

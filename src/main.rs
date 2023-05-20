@@ -21,7 +21,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // dbg!(&args);
 
-    let mut node = node::Node::<Follower>::builder_with_data(args.id)
+    let (mut node, node_socket) = node::Node::<Follower>::builder_with_data(args.id)
         .peers(args.peers)
         .server(&args.server)
         .await?
@@ -60,8 +60,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
         async move {
             loop {
-                let random = rng.gen_range(1_000..1_500);
-                if let Err(err) = timer(random, tx_msg.clone(), tx_timer.subscribe()).await {
+                if let Err(err) = timer(&mut rng, tx_msg.clone(), tx_timer.subscribe()).await {
                     println!("error sending msg: {:?}", err);
                     return;
                 };
@@ -69,9 +68,22 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     });
 
+    task::spawn({
+        let tx_timer = tx_timer.clone();
+
+        async move {
+            loop {
+                if let Err(err) = node_socket.listen(tx_timer.clone()).await {
+                    println!("error sending msg: {:?}", err);
+                    continue;
+                };
+            }
+        }
+    });
+
     Ok(tokio::select! {
         _ = node.sender(tx_msg.subscribe()) => {},
-        _ = node.listen(tx_timer.clone()) => {},
+        // _ = node.listen(tx_timer.clone()) => {},
         // _ = node.timer(tx_msg.clone(), tx_timer.subscribe()) => {},
 
     })
