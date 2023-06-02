@@ -7,6 +7,7 @@ use futures::future::join_all;
 use prost::Message;
 use rand::rngs::{StdRng, ThreadRng};
 use rand::Rng;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
@@ -50,10 +51,11 @@ pub struct Follower;
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: u64,
+    // TODO: change to map
     pub peers: Vec<Peer>,
     pub server: SocketAddr,
 
-    pub curent_term: u64,
+    pub current_term: u64,
     pub voted_for: Option<u64>,
     pub role: Role,
 
@@ -209,7 +211,7 @@ impl NodeBuilder<Socket, SocketAddr> {
             id,
             server,
             peers,
-            curent_term,
+            current_term: curent_term,
             voted_for,
             role: Role::Follower,
             log_index,
@@ -361,6 +363,7 @@ impl Node {
                 ..
             } => {
                 println!("follower");
+                // NOTE: do we need tokio select?
                 tokio::select! {
                     msg = rx_timer.recv() => {
                         if msg.is_err() {
@@ -373,7 +376,7 @@ impl Node {
 
                         let msg = message::Data {
                             msg_type: Some(message::data::MsgType::Vote(message::VoteRequest {
-                                term: self.curent_term + 1,
+                                term: self.current_term + 1,
                                 candidate_id: self.id,
                                 last_log_idx: self.log_index,
                                 last_log_term: self.log_term,
@@ -387,16 +390,45 @@ impl Node {
                         let msg = msg?;
                         match msg.msg_type {
                             Some(message::data::MsgType::Vote(vote_request)) => {
+                                // TODO: send message back to the correct node
                                 println!("vote request: {:?}", vote_request);
-                                if vote_request.term > self.curent_term {
-                                    self.curent_term = vote_request.term;
+                                if vote_request.term > self.current_term {
+                                    self.current_term = vote_request.term;
                                     self.voted_for = Some(vote_request.candidate_id);
                                     self.role = Role::Follower;
 
                                     let msg = message::Data {
                                         msg_type: Some(message::data::MsgType::Response(message::Response {
-                                            term: self.curent_term,
+                                            term: self.current_term,
                                             status: true,
+                                        }))
+                                    };
+
+                                    self.send_msg(&msg).await?;
+                                }
+                            },
+                            Some(message::data::MsgType::Append(append_request)) => {
+                                println!("append request: {:?}", append_request);
+
+                                if append_request.term > self.current_term && append_request.prev_log_idx == self.log_index && append_request.prev_log_term == self.log_term {
+                                    if append_request.entries.len() > 0 {
+                                        self.log_index += 1;
+                                        self.log_term = append_request.term;
+                                    }
+
+                                    let msg = message::Data {
+                                        msg_type: Some(message::data::MsgType::Response(message::Response {
+                                            term: self.current_term,
+                                            status: true,
+                                        }))
+                                    };
+
+                                    self.send_msg(&msg).await?;
+                                } else {
+                                    let msg = message::Data {
+                                        msg_type: Some(message::data::MsgType::Response(message::Response {
+                                            term: self.current_term,
+                                            status: false,
                                         }))
                                     };
 
@@ -405,7 +437,6 @@ impl Node {
                             },
                             _ => {},
                         }
-
                     },
                 };
 
@@ -416,6 +447,110 @@ impl Node {
                 ..
             } => {
                 println!("candidate");
+                tokio::select! {
+                    msg = rx_timer.recv() => {
+                        if msg.is_err() {
+                          println!("error receiving msg: {:?}", msg);
+                          return Err(anyhow!("error receiving msg, {:?}", msg));
+                        };
+
+                        println!("sending vote request");
+
+                        let msg = message::Data {
+                            msg_type: Some(message::data::MsgType::Vote(message::VoteRequest {
+                                term: self.current_term + 1,
+                                candidate_id: self.id,
+                                last_log_idx: self.log_index,
+                                last_log_term: self.log_term,
+                            }))
+                        };
+                        self.send_msg(&msg).await?;
+                    },
+
+                    msg = rx_msg.recv() => {
+                        let msg = msg?;
+                        match msg.msg_type {
+                            Some(message::data::MsgType::Vote(vote_request)) => {
+                                println!("vote request: {:?}", vote_request);
+
+                                if vote_request.term > self.current_term {
+                                    self.current_term = vote_request.term;
+                                    self.voted_for = Some(vote_request.candidate_id);
+                                    self.role = Role::Follower;
+
+                                    let msg = message::Data {
+                                        msg_type: Some(message::data::MsgType::Response(message::Response {
+                                            term: self.current_term,
+                                            status: true,
+                                        }))
+                                    };
+
+                                    self.send_msg(&msg).await?;
+                                } else {
+                                    let msg = match self.voted_for {
+                                        None => {
+                                            self.voted_for = Some(vote_request.candidate_id);
+                                            self.role = Role::Follower;
+
+                                            message::Data {
+                                                msg_type: Some(message::data::MsgType::Response(message::Response {
+                                                    term: self.current_term,
+                                                    status: true,
+                                                }))
+                                            }
+                                        },
+                                        Some(voted_for) if voted_for == vote_request.candidate_id => {
+
+                                            message::Data {
+                                                msg_type: Some(message::data::MsgType::Response(message::Response {
+                                                    term: self.current_term,
+                                                    status: true,
+                                                }))
+                                            }
+                                        },
+                                        _ => {
+                                            message::Data {
+                                                msg_type: Some(message::data::MsgType::Response(message::Response {
+                                                    term: self.current_term,
+                                                    status: false,
+                                                }))
+                                            }
+                                        },
+                                    };
+
+                                    self.send_msg(&msg).await?;
+                                }
+                            },
+                            Some(message::data::MsgType::Response(response_request)) => {
+                                println!("response request: {:?}", response_request);
+                                match response_request.term.cmp(&self.current_term) {
+                                    Ordering::Greater => {
+                                        self.current_term = response_request.term;
+                                        self.role = Role::Follower;
+                                    },
+                                    Ordering::Less | Ordering::Equal => {
+                                       if response_request.status {
+                                           if (votes + 1) > (self.peers.len() as u64 / 2) {
+                                                self.role = Role::Leader;
+                                            } else {
+                                                let votes = votes + 1;
+                                                println!("votes: {:?}", &votes);
+
+                                                self.role = Role::Candidate {
+                                                    votes: votes,
+                                                    vote_set: vote_set.clone(),
+                                                };
+                                            }
+
+                                       }
+                                    },
+                                }
+
+                            },
+                            _ => {},
+                        }
+                    },
+                };
 
                 Ok(())
             }
